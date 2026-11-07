@@ -1,0 +1,10 @@
+node_modules
+.next
+cloudflared.exe
+*.log
+.env.local
+public/test_screenshots
+scripts/__pycache__
+.DS_Store
+Thumbs.db
+
