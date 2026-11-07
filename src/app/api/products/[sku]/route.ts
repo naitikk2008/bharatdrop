@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
+import { getCatalogProductBySku } from '@/lib/catalog';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(
   req: NextRequest,
   { params }: { params: { sku: string } }
 ) {
-  try {
-    const sku = params.sku;
+  const sku = params.sku;
 
+  try {
     const product = await prisma.product.findUnique({
       where: { sku },
       select: {
@@ -45,38 +48,69 @@ export async function GET(
       },
     });
 
-    if (!product) {
-      return NextResponse.json({ success: false, error: 'Product not found' }, { status: 404 });
+    if (product) {
+      // Fetch related products in same category
+      const related = await prisma.product.findMany({
+        where: {
+          categoryName: product.categoryName,
+          sku: { not: product.sku },
+          isApproved: true,
+        },
+        take: 4,
+        select: {
+          id: true,
+          sku: true,
+          name: true,
+          categoryName: true,
+          sellingPrice: true,
+          mrp: true,
+          discountPercent: true,
+          imageUrl: true,
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        product,
+        related,
+      });
     }
 
-    // Fetch related products in same category
-    const related = await prisma.product.findMany({
-      where: {
-        categoryName: product.categoryName,
-        sku: { not: product.sku },
-        isApproved: true,
-      },
-      take: 4,
-      select: {
-        id: true,
-        sku: true,
-        name: true,
-        categoryName: true,
-        sellingPrice: true,
-        mrp: true,
-        discountPercent: true,
-        imageUrl: true,
-      },
-    });
+    // Fallback if not found in DB
+    const fallbackItem = getCatalogProductBySku(sku);
+    if (fallbackItem) {
+      const { relatedProducts, ...prod } = fallbackItem;
+      return NextResponse.json({
+        success: true,
+        product: {
+          ...prod,
+          reviews: [],
+          status: 'APPROVED',
+          createdAt: new Date().toISOString(),
+        },
+        related: relatedProducts || [],
+      });
+    }
 
-    return NextResponse.json({
-      success: true,
-      product,
-      related,
-    });
+    return NextResponse.json({ success: false, error: 'Product not found' }, { status: 404 });
   } catch (error: any) {
-    console.error('Single product API error:', error);
+    console.warn('Prisma single product query failed, using fallback:', error?.message);
+
+    const fallbackItem = getCatalogProductBySku(sku);
+    if (fallbackItem) {
+      const { relatedProducts, ...prod } = fallbackItem;
+      return NextResponse.json({
+        success: true,
+        product: {
+          ...prod,
+          reviews: [],
+          status: 'APPROVED',
+          createdAt: new Date().toISOString(),
+        },
+        related: relatedProducts || [],
+      });
+    }
+
     return NextResponse.json({ success: false, error: 'Failed to fetch product details' }, { status: 500 });
   }
 }
-

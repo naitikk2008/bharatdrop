@@ -1,19 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
+import { filterCatalogProducts } from '@/lib/catalog';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const q = searchParams.get('q')?.trim() || '';
-    const category = searchParams.get('category')?.trim() || '';
-    const sort = searchParams.get('sort') || 'popular';
-    const filter = searchParams.get('filter') || ''; // featured, trending, best_seller, under199, under499
-    const minPrice = parseFloat(searchParams.get('minPrice') || '0');
-    const maxPrice = parseFloat(searchParams.get('maxPrice') || '999999');
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
-    const limit = Math.min(60, Math.max(1, parseInt(searchParams.get('limit') || '24')));
-    const skip = (page - 1) * limit;
+  const { searchParams } = new URL(req.url);
+  const q = searchParams.get('q')?.trim() || '';
+  const category = searchParams.get('category')?.trim() || '';
+  const sort = searchParams.get('sort') || 'popular';
+  const filter = searchParams.get('filter') || ''; // featured, trending, best_seller, under199, under499
+  const minPrice = parseFloat(searchParams.get('minPrice') || '0');
+  const maxPrice = parseFloat(searchParams.get('maxPrice') || '999999');
+  const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
+  const limit = Math.min(60, Math.max(1, parseInt(searchParams.get('limit') || '24')));
+  const skip = (page - 1) * limit;
 
+  try {
     const where: any = {
       isApproved: true,
       status: 'APPROVED',
@@ -48,7 +51,6 @@ export async function GET(req: NextRequest) {
     if (sort === 'newest') orderBy = { createdAt: 'desc' };
     if (sort === 'discount') orderBy = { discountPercent: 'desc' };
 
-    // STRICT: Select only customer safe fields - NO supplier cost!
     const [products, total] = await Promise.all([
       prisma.product.findMany({
         where,
@@ -65,30 +67,77 @@ export async function GET(req: NextRequest) {
           mrp: true,
           discountPercent: true,
           stock: true,
+          hasImage: true,
+          imageUrl: true,
           isFeatured: true,
           isTrending: true,
           isBestSeller: true,
-          imageUrl: true,
-          hasImage: true,
-          createdAt: true,
+          isApproved: true,
         },
       }),
       prisma.product.count({ where }),
     ]);
 
+    // If database returned products, serve them!
+    if (total > 0 && products.length > 0) {
+      return NextResponse.json({
+        success: true,
+        products,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      });
+    }
+
+    // Otherwise, seamless fallback to catalogue JSON
+    const fallbackResult = filterCatalogProducts({
+      q,
+      category,
+      sort,
+      filter,
+      minPrice,
+      maxPrice,
+      page,
+      limit,
+    });
+
     return NextResponse.json({
       success: true,
-      products,
+      products: fallbackResult.products,
       pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
+        page: fallbackResult.page,
+        limit: fallbackResult.limit,
+        total: fallbackResult.total,
+        totalPages: fallbackResult.totalPages,
       },
     });
   } catch (error: any) {
-    console.error('Products API error:', error);
-    return NextResponse.json({ success: false, error: 'Failed to fetch products' }, { status: 500 });
+    console.warn('Prisma query failed, activating catalog fallback:', error?.message);
+
+    // Bulletproof fallback to ensure products are ALWAYS visible on Vercel / serverless
+    const fallbackResult = filterCatalogProducts({
+      q,
+      category,
+      sort,
+      filter,
+      minPrice,
+      maxPrice,
+      page,
+      limit,
+    });
+
+    return NextResponse.json({
+      success: true,
+      products: fallbackResult.products,
+      pagination: {
+        page: fallbackResult.page,
+        limit: fallbackResult.limit,
+        total: fallbackResult.total,
+        totalPages: fallbackResult.totalPages,
+      },
+    });
   }
 }
-

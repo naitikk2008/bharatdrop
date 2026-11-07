@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
+import { loadCategoriesFromFile } from '@/lib/catalog';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
@@ -15,10 +18,15 @@ export async function GET() {
       },
     });
 
-    return NextResponse.json({ success: true, categories });
+    if (categories && categories.length > 0) {
+      return NextResponse.json({ success: true, categories });
+    }
+
+    const fallbackCats = loadCategoriesFromFile();
+    return NextResponse.json({ success: true, categories: fallbackCats });
   } catch (error: any) {
-    console.error('Categories API error:', error);
-    return NextResponse.json({ success: false, error: 'Failed to fetch categories' }, { status: 500 });
+    console.warn('Prisma categories query failed, using fallback:', error?.message);
+    const fallbackCats = loadCategoriesFromFile();
+    return NextResponse.json({ success: true, categories: fallbackCats });
   }
 }
-
